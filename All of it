@@ -1,0 +1,1420 @@
+# `queue` ļauj droši nodot ziņas starp fonā strādājošo Selenium pavedienu un Tkinter logu.
+import queue
+# `re` tiek izmantots tekstu un skaitļu meklēšanai ar regulārajām izteiksmēm.
+import re
+# `threading` ļauj palaist meklēšanu fonā, lai Tkinter logs neuzkārtos.
+import threading
+# `time` dod nelielas pauzes starp Selenium darbībām un cilņu maiņām.
+import time
+# `tkinter` izveido programmas logus, ievades laukus un rezultātu tabulu.
+import tkinter as tk
+# `webbrowser` atver izvēlēto sludinājuma linku lietotāja pārlūkā.
+import webbrowser
+# `dataclass` dod ērtu veidu glabāt filtrus un atrastos rezultātus.
+from dataclasses import dataclass
+# `Decimal` palīdz precīzi strādāt ar motora tilpuma skaitļiem.
+from decimal import Decimal, InvalidOperation
+# `messagebox` rāda brīdinājumus/info logus, `ttk` dod modernākus Tkinter elementus.
+from tkinter import messagebox, ttk
+# `urllib.parse` palīdz veidot, salīdzināt un normalizēt URL adreses.
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+
+# `BeautifulSoup` tiek izmantots HTML lapu noskrāpēšanai un vajadzīgo datu atrašanai.
+from bs4 import BeautifulSoup
+# `webdriver` vada Chrome pārlūku ar Selenium palīdzību.
+from selenium import webdriver
+# Selenium izņēmumi ļauj droši apstrādāt situācijas, kad elementus nevar atrast vai tie ielādējas par ilgu.
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
+# `Options` ļauj noregulēt, kā Chrome tiek palaists.
+from selenium.webdriver.chrome.options import Options
+# `By` norāda, pēc kāda atribūta meklēt HTML elementus.
+from selenium.webdriver.common.by import By
+# `Keys` ļauj simulēt tastatūras taustiņus, piemēram, TAB.
+from selenium.webdriver.common.keys import Keys
+# `expected_conditions` satur gatavas Selenium gaidīšanas pārbaudes.
+from selenium.webdriver.support import expected_conditions as EC
+# `Select` strādā ar HTML dropdown laukiem, `WebDriverWait` gaida elementu ielādi.
+from selenium.webdriver.support.ui import Select, WebDriverWait
+
+
+# SS.com vieglo auto sadaļas sākuma lapa.
+SS_URL = "https://www.ss.com/lv/transport/cars/"
+# CSDD VIN pārbaudes lapa.
+CSDD_URL = "https://e.csdd.lv/chkta"
+# Pauze pēc SS.com filtru ievades, lai lapa paspēj atjaunoties.
+SS_REFRESH_WAIT_SECONDS = 0.1
+# Pauze pēc VIN pogas nospiešanas, lai VIN kļūtu redzams lapā.
+SS_SHOW_VIN_WAIT_SECONDS = 0.1
+# Pauze pēc CSDD lapas atvēršanas, pirms ievadīt VIN.
+CSDD_INPUT_WAIT_SECONDS = 0.1
+# Pauze pirms cilņu pārslēgšanas, lai pārlūks paspēj stabilizēties.
+TAB_SWITCH_WAIT_SECONDS = 1.0
+
+# Lietotājam pieejamo marku saraksts.
+MARKAS = [
+    "",
+    "Alfa Romeo", "Audi", "BMW", "Chevrolet", "Chrysler", "Citroen", "Cupra", "Dacia",
+    "Dodge", "Fiat", "Ford", "Honda", "Hyundai", "Infiniti", "Jaguar", "Jeep", "Kia",
+    "Lancia", "Land Rover", "Lexus", "Mazda", "Mercedes", "Mini", "Mitsubishi", "Nissan",
+    "Opel", "Peugeot", "Porsche", "Renault", "Saab", "Seat", "Skoda", "Smart", "Subaru",
+    "Suzuki", "Tesla", "Toyota", "Volkswagen", "Volvo", "Gaz", "Vaz", "Citas",
+]
+DZINEJI = ["", "Benzīns", "Benzīns/gāze", "Dīzelis", "Hibrīds", "Elektriskais"]
+ATRUMKARBAS = ["", "Manuāla", "Automāts"]
+RAJONI = [
+    "", "Visi", "Rīga", "Jūrmala", "Rīgas rajons", "Aizkraukle un raj.", "Alūksne un raj.",
+    "Balvi un raj.", "Bauska un raj.", "Cēsis un raj.", "Daugavpils un raj.", "Dobele un raj.",
+    "Gulbene un raj.", "Jēkabpils un raj.", "Jelgava un raj.", "Krāslava un raj.",
+    "Kuldīga un raj.", "Liepāja un raj.", "Limbaži un raj.", "Ludza un raj.", "Madona un raj.",
+    "Ogre un raj.", "Preiļi un raj.", "Rēzekne un raj.", "Saldus un raj.", "Talsi un raj.",
+    "Tukums un raj.", "Valka un raj.", "Valmiera un raj.", "Ventspils un raj.", "Igaunija",
+    "Lietuva",
+]
+GADI = [""] + [str(year) for year in range(2026, 1979, -1)]
+
+# Izveido motora tilpumu izvēles sarakstu lietotāja filtriem.
+def build_engine_values():
+    """Izveido motora tilpuma izvēles sarakstu no 0.5 līdz 5.0."""
+    values = [""]
+    current = Decimal("0.5")
+    while current <= Decimal("5.0"):
+        values.append(f"{current:.1f}")
+        current += Decimal("0.2")
+    if values[-1] != "5.0":
+        values.append("5.0")
+    return values
+
+
+TILPUMI = build_engine_values()
+
+# Teksta ievades lauku nosaukumi SS.com filtriem.
+FILTER_INPUT_NAMES = {
+    "cena_no": ["topt[8][min]", "topt[price][min]"],
+    "cena_lidz": ["topt[8][max]", "topt[price][max]"],
+}
+FILTER_SELECTS = {
+    "gads_no": ["topt[18][min]", "topt[year][min]"],
+    "gads_lidz": ["topt[18][max]", "topt[year][max]"],
+    "tilpums_no": ["topt[15][min]", "topt[engine_volume][min]"],
+    "tilpums_lidz": ["topt[15][max]", "topt[engine_volume][max]"],
+    "dzinejs": ["topt[34]", "topt[fuel]"],
+    "atrumkarba": ["topt[35]", "topt[gearbox]"],
+    "rajons": ["topt[32]", "topt[district]"],
+    "darijuma_veids": ["sid", "topt[sell_type]"],
+}
+
+
+@dataclass
+class SearchFilters:
+    """Glabā lietotāja izvēlētos meklēšanas filtrus vienā objektā."""
+    marka: str
+    cena_no: str
+    cena_lidz: str
+    gads_no: str
+    gads_lidz: str
+    tilpums_no: str
+    tilpums_lidz: str
+    dzinejs: str
+    atrumkarba: str
+    rajons: str
+
+
+@dataclass
+class CarResult:
+    """Glabā vienas automašīnas savākto informāciju rezultātu tabulai."""
+    links: str
+    modelis_marka: str
+    gads: str
+    nobraukums: str
+    motors: str
+    rajons: str
+    apskate_deriga: str
+    nakama_ta: str
+
+
+class NoResultsError(Exception):
+    """Tiek izmests, ja SS.com pēc filtriem neatrod nevienu sludinājumu."""
+    pass
+
+
+class ManualVerificationRequiredError(Exception):
+    """Tiek izmests, ja bez lietotāja palīdzības nevar pabeigt verifikāciju."""
+    pass
+
+# Sakārto tekstu vienotā formā salīdzināšanai un attēlošanai.
+def normalize_text(text):
+    """Sakārto tekstu: noņem liekās atstarpes un apvieno to vienotā formā."""
+    if text is None:
+        return ""
+    cleaned = str(text).replace("\xa0", " ")
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+# Pārbauda, vai ievadē ir tikai cipari vai tā ir tukša.
+def only_digits_or_empty(value):
+    """Atļauj ievadē tikai ciparus vai tukšu vērtību."""
+    return value == "" or value.isdigit()
+
+# Droši pārvērš teksta vērtību decimal skaitlī.
+def to_decimal(value):
+    """Droši pārvērš tekstu decimal skaitlī, ja tas ir iespējams."""
+    if not value:
+        return None
+    try:
+        return Decimal(str(value).replace(",", "."))
+    except (InvalidOperation, ValueError):
+        return None
+
+# Atrod pirmo skaitlisko daļu dotajā tekstā.
+def numeric_part(text):
+    """Izvelk pirmo skaitli no teksta, piemēram, no motora tilpuma virknes."""
+    match = re.search(r"\d+(?:[.,]\d+)?", normalize_text(text))
+    if not match:
+        return None
+    return to_decimal(match.group(0))
+
+# Notīra lauka nosaukumu no liekām beigām, piemēram, kolas.
+def clean_label(text):
+    """Noņem etiķetes beigu kolu, lai salīdzināšana būtu vienkāršāka."""
+    return normalize_text(text).rstrip(":")
+
+# Vienkāršo tekstu robustai salīdzināšanai bez diakritiskajām zīmēm.
+def simplify_for_match(text):
+    """Vienkāršo tekstu salīdzināšanai: mazie burti un latviešu diakritikas noņemšana."""
+    text = normalize_text(text).casefold()
+    replacements = {
+        "ā": "a",
+        "č": "c",
+        "ē": "e",
+        "ģ": "g",
+        "ī": "i",
+        "ķ": "k",
+        "ļ": "l",
+        "ņ": "n",
+        "š": "s",
+        "ū": "u",
+        "ž": "z",
+    }
+    for original, replacement in replacements.items():
+        text = text.replace(original, replacement)
+    return text
+
+# Izveido dzinēja nosaukuma variantus, lai vieglāk atrast pareizo opciju.
+def engine_match_variants(text):
+    """Izveido iespējamās degvielas/dzinēja teksta variācijas salīdzināšanai."""
+    normalized = simplify_for_match(text)
+    variants = {normalized}
+
+    if normalized == "benzins":
+        variants.update({"benzin"})
+    elif normalized == "benzins/gaze":
+        variants.update({"benzin/gaze", "gaze", "gas", "lpg", "benzins gaze"})
+    elif normalized == "dizelis":
+        variants.update({"diesel"})
+    elif normalized == "hibrids":
+        variants.update({"hybrid"})
+    elif normalized == "elektriskais":
+        variants.update({"electric", "elektro", "elektriba"})
+
+    return variants
+
+# Izveido dropdown lauku vērtību variantus salīdzināšanai.
+def select_match_variants(text):
+    """Izveido select lauku teksta variantus, lai vieglāk atrast pareizo opciju."""
+    normalized = simplify_for_match(text)
+    variants = {normalized}
+
+    if normalized == "manuala":
+        variants.update({"manual", "mehaniska", "mechanical"})
+    elif normalized == "automats":
+        variants.update({"automatic", "auto"})
+    elif normalized.endswith(" un raj."):
+        variants.update({normalized.replace(" un raj.", ""), normalized.replace(" un raj.", " rajons")})
+    elif normalized == "rigas rajons":
+        variants.update({"riga rajons", "rigas raj."})
+
+    return variants
+
+# Normalizē URL, lai lapu salīdzināšana būtu stabila.
+def canonicalize_url(url):
+    """Normalizē URL, lai lapu ciklu pārbaude salīdzinātu adreses korekti."""
+    parts = urlsplit(url)
+    query = urlencode(sorted(parse_qsl(parts.query, keep_blank_values=True)))
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((parts.scheme, parts.netloc, path, query, ""))
+
+
+VIN_TRANSLITERATION = {
+    "A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7, "H": 8,
+    "J": 1, "K": 2, "L": 3, "M": 4, "N": 5, "P": 7, "R": 9,
+    "S": 2, "T": 3, "U": 4, "V": 5, "W": 6, "X": 7, "Y": 8, "Z": 9,
+    "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9,
+}
+VIN_WEIGHTS = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2]
+
+# Pārbauda, vai VIN atbilst standarta kontrolsummas noteikumiem.
+def vin_checksum_is_valid(vin):
+    """Pārbauda, vai VIN atbilst standarta checksum noteikumiem."""
+    vin = normalize_text(vin).upper()
+    if len(vin) != 17:
+        return False
+
+    total = 0
+    for index, character in enumerate(vin):
+        if character not in VIN_TRANSLITERATION:
+            return False
+        total += VIN_TRANSLITERATION[character] * VIN_WEIGHTS[index]
+
+    remainder = total % 11
+    expected_check_digit = "X" if remainder == 10 else str(remainder)
+    return vin[8] == expected_check_digit
+
+# Atrod pirmo derīga izskata VIN kandidātu tekstā.
+def extract_valid_vin(text):
+    """Atrod pirmo derīga izskata VIN kandidātu dotajā tekstā."""
+    candidates = re.findall(r"\b[A-HJ-NPR-Z0-9]{17}\b", normalize_text(text).upper())
+    fallback_candidates = []
+    for candidate in candidates:
+        if candidate.isdigit():
+            continue
+        if vin_checksum_is_valid(candidate):
+            return candidate
+        fallback_candidates.append(candidate)
+
+    return fallback_candidates[0] if fallback_candidates else ""
+
+# Mēģina atrast VIN tieši lapas tabulā vai kopējā tekstā.
+def extract_vin_from_soup(soup):
+    """Mēģina atrast VIN tieši pie VIN lauka vai, ja vajag, visā lapas tekstā."""
+    for row in soup.select("table tr"):
+        cells = row.find_all(["td", "th"])
+        if len(cells) < 2:
+            continue
+        label = simplify_for_match(cells[0].get_text(" ", strip=True))
+        if "vin" not in label:
+            continue
+        candidate = extract_valid_vin(cells[1].get_text(" ", strip=True))
+        if candidate:
+            return candidate
+
+    return extract_valid_vin(soup.get_text(" ", strip=True))
+
+# Atver saiti lietotāja noklusētajā pārlūkā.
+def open_url(url):
+    """Atver izvēlēto sludinājuma saiti noklusētajā pārlūkā."""
+    webbrowser.open_new_tab(url)
+
+
+class SSCarScraper:
+    """Vada visu Selenium darbu no SS.com filtru ievades līdz CSDD pārbaudei."""
+    # Inicializē skrāpētāja stāvokli un saziņas callback funkcijas.
+    def __init__(self, progress_callback, manual_verification_callback=None):
+        """Sagatavo skrāpētāju un callback funkcijas saziņai ar Tkinter logu."""
+        self.progress_callback = progress_callback
+        self.manual_verification_callback = manual_verification_callback
+        self.driver = None
+        self.wait = None
+        self.csdd_tab = None
+        self.ss_tab = None
+        self.found_listing_links = 0
+
+    # Nosūta īsu progresa ziņu lietotāja interfeisam.
+    def report(self, text):
+        """Nosūta lietotāja logam īsu statusa ziņu par notiekošo darbu."""
+        self.progress_callback(text)
+
+    # Pārbauda, vai SS.com lapā ir redzams konkrētais CAPTCHA logs.
+    def page_requires_manual_verification(self):
+        """Pārbauda, vai SS.com lapā ir redzams konkrētais CAPTCHA popup."""
+        try:
+            elements = self.driver.find_elements(By.ID, "win_alert_dv_recaptcha")
+            if any(element.is_displayed() for element in elements):
+                return True
+        except Exception:
+            pass
+
+        return False
+
+    # Ja nepieciešams, aptur plūsmu un gaida manuālu CAPTCHA apstiprinājumu.
+    def wait_for_manual_verification(self, context):
+        """Ja vajag, aptur skrāpēšanu un gaida, kamēr lietotājs izpilda CAPTCHA."""
+        if "pēc pogas" not in context:
+            return
+        current_vin = extract_vin_from_soup(BeautifulSoup(self.driver.page_source, "html.parser"))
+        if current_vin:
+            return
+        if not self.page_requires_manual_verification():
+            return
+        if not self.manual_verification_callback:
+            raise ManualVerificationRequiredError("Nepieciešama manuāla verifikācija SS.com lapā.")
+
+        self.report("Gaida manuālu verifikāciju SS.com lapā.")
+        prompt = (
+            f"SS.com pieprasa verifikāciju {context}.\n"
+            "Pabeidz to pārlūkā un nospied 'Turpināt'."
+        )
+        if self.page_requires_manual_verification():
+            should_continue = self.manual_verification_callback(prompt)
+            if not should_continue:
+                raise ManualVerificationRequiredError("Meklēšana tika atcelta verifikācijas laikā.")
+            time.sleep(TAB_SWITCH_WAIT_SECONDS)
+            self.wait_for_page_ready()
+
+    # Palaiž Chrome pārlūku un sagatavo Selenium darbam.
+    def create_driver(self):
+        """Palaiž Chrome pārlūku un sagatavo Selenium gaidīšanas objektu."""
+        options = Options()
+        options.add_argument("--start-maximized")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+        self.driver = webdriver.Chrome(options=options)
+        self.wait = WebDriverWait(self.driver, 1)
+        self.ss_tab = self.driver.current_window_handle
+
+    # Aizver pārlūku un droši beidz Selenium sesiju.
+    def close(self):
+        """Droši aizver pārlūku un atbrīvo Selenium resursus."""
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+
+    # Izpilda visu meklēšanas procesu no sākuma līdz gala rezultātiem.
+    def run(self, filters):
+        """Izpilda pilnu meklēšanas ciklu no filtru ievades līdz rezultātiem."""
+        self.create_driver()
+        try:
+            self.report("Atver SS.com.")
+            self.driver.get(SS_URL)
+            self.open_brand_page(filters.marka)
+            self.apply_filters(filters)
+            results = self.collect_results(filters.rajons)
+            if not results and self.found_listing_links == 0:
+                raise NoResultsError("Sludinājumi dotajā kategorijā nav atrasti")
+            return results
+        finally:
+            self.close()
+
+    # Atver izvēlētās markas lapu SS.com vietnē.
+    def open_brand_page(self, marka):
+        """Atver lietotāja izvēlētās markas sludinājumu lapu SS.com."""
+        if not marka:
+            raise ValueError("Marka nav izvēlēta.")
+        self.wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        try:
+            brand_link = self.wait.until(EC.element_to_be_clickable((By.LINK_TEXT, marka)))
+            brand_link.click()
+            self.wait_for_page_ready()
+            return
+        except TimeoutException:
+            pass
+
+        for link in self.driver.find_elements(By.TAG_NAME, "a"):
+            if normalize_text(link.text).casefold() == marka.casefold():
+                self.driver.execute_script("arguments[0].click();", link)
+                self.wait_for_page_ready()
+                return
+        raise RuntimeError(f"SS.com lapā neizdevās atrast marku '{marka}'.")
+
+    # Ievada visus lietotāja filtrus SS.com meklēšanas formā.
+    def apply_filters(self, filters):
+        """Ievada visus filtrus SS.com meklēšanas formā."""
+        self.report("Ievada filtrus.")
+        self.set_input_value(FILTER_INPUT_NAMES["cena_no"], filters.cena_no)
+        self.set_input_value(FILTER_INPUT_NAMES["cena_lidz"], filters.cena_lidz)
+        self.set_select_value(FILTER_SELECTS["gads_no"], filters.gads_no, prefer_lower=True)
+        self.set_select_value(FILTER_SELECTS["gads_lidz"], filters.gads_lidz, prefer_lower=True)
+        self.set_select_value(FILTER_SELECTS["tilpums_no"], filters.tilpums_no, prefer_lower=True)
+        self.set_select_value(FILTER_SELECTS["tilpums_lidz"], filters.tilpums_lidz, prefer_lower=True)
+        self.set_engine_value(FILTER_SELECTS["dzinejs"], filters.dzinejs)
+        self.set_select_value(FILTER_SELECTS["atrumkarba"], filters.atrumkarba)
+        if filters.rajons and filters.rajons != "Visi":
+            self.set_select_value(FILTER_SELECTS["rajons"], filters.rajons)
+        self.set_select_value(FILTER_SELECTS["darijuma_veids"], "Pārdod")
+        self.wait_for_page_ready()
+        if self.results_page_has_no_results():
+            raise NoResultsError("Sludinājumi dotajā kategorijā nav atrasti")
+
+    # Atrod teksta ievades lauku un ievada tajā vērtību.
+    def set_input_value(self, possible_names, value):
+        """Atrod tekstlodziņu un ievada tajā norādīto vērtību."""
+        if not value:
+            return
+        element = self.find_first_by_names(possible_names)
+        if element is None:
+            return
+        element.clear()
+        element.send_keys(value)
+        self.trigger_refresh(element)
+
+    # Atrod select lauku un izvēlas tam atbilstošu opciju.
+    def set_select_value(self, possible_names, desired_text, prefer_lower=False):
+        """Atrod select lauku un iestata tuvāko atbilstošo opciju."""
+        if not desired_text:
+            return
+        element = self.find_select_element(possible_names, desired_text)
+        if element is None:
+            return
+        value_to_use = self.pick_best_option_text(element, desired_text, prefer_lower)
+        if not value_to_use:
+            return
+        select = Select(element)
+        for option in select.options:
+            if normalize_text(option.text) == value_to_use:
+                select.select_by_visible_text(option.text)
+                self.trigger_refresh(element)
+                return
+
+    # Mēģina atrast select elementu pēc name vai opciju satura.
+    def find_select_element(self, possible_names, desired_text):
+        """Meklē select elementu pēc `name` vai pēc opciju satura."""
+        wanted_variants = select_match_variants(desired_text)
+
+        for name in possible_names:
+            elements = self.driver.find_elements(By.NAME, name)
+            if elements:
+                return elements[0]
+
+        for select_element in self.driver.find_elements(By.TAG_NAME, "select"):
+            try:
+                option_texts = [
+                    simplify_for_match(option.text) for option in Select(select_element).options
+                ]
+                option_values = [
+                    simplify_for_match(option.get_attribute("value") or "")
+                    for option in Select(select_element).options
+                ]
+            except Exception:
+                continue
+
+            if any(
+                variant and (
+                    any(variant in option_text for option_text in option_texts)
+                    or any(variant in option_value for option_value in option_values)
+                )
+                for variant in wanted_variants
+            ):
+                return select_element
+
+        return self.find_first_by_names(possible_names)
+
+    # Atsevišķi apstrādā dzinēja dropdown izvēli.
+    def set_engine_value(self, possible_names, desired_text):
+        """Atsevišķi apstrādā dzinēja izvēli, jo SS.com šeit teksts mēdz atšķirties."""
+        if not desired_text:
+            return
+        element = self.find_engine_select(possible_names, desired_text)
+        if element is None:
+            return
+
+        select = Select(element)
+        wanted_variants = engine_match_variants(desired_text)
+
+        for option in select.options:
+            option_text = simplify_for_match(option.text)
+            option_value = simplify_for_match(option.get_attribute("value") or "")
+            if option_text in wanted_variants or option_value in wanted_variants:
+                select.select_by_visible_text(option.text)
+                self.trigger_refresh(element)
+                return
+
+        for option in select.options:
+            option_text = simplify_for_match(option.text)
+            option_value = simplify_for_match(option.get_attribute("value") or "")
+            if any(variant and (variant in option_text or variant in option_value) for variant in wanted_variants):
+                select.select_by_visible_text(option.text)
+                self.trigger_refresh(element)
+                return
+
+    # Atrod tieši dzinēja select lauku.
+    def find_engine_select(self, possible_names, desired_text):
+        """Atrod tieši dzinēja dropdown lauku."""
+        wanted_variants = engine_match_variants(desired_text)
+
+        for name in possible_names:
+            elements = self.driver.find_elements(By.NAME, name)
+            if elements:
+                return elements[0]
+
+        for select_element in self.driver.find_elements(By.TAG_NAME, "select"):
+            try:
+                option_texts = [
+                    simplify_for_match(option.text) for option in Select(select_element).options
+                ]
+            except Exception:
+                continue
+            if any(
+                variant and any(variant in option_text for option_text in option_texts)
+                for variant in wanted_variants
+            ):
+                return select_element
+
+        return self.find_first_by_names(possible_names)
+
+    # Izvēlas visatbilstošāko opcijas tekstu konkrētajā select laukā.
+    def pick_best_option_text(self, select_element, desired_text, prefer_lower):
+        """Izvēlas labāko opcijas tekstu, ko iestatīt konkrētajā select laukā."""
+        desired_normalized = normalize_text(desired_text)
+        desired_variants = select_match_variants(desired_text)
+        options = [normalize_text(option.text) for option in Select(select_element).options]
+        if desired_normalized in options:
+            return desired_normalized
+
+        desired_number = numeric_part(desired_normalized)
+        if desired_number is None:
+            for option in options:
+                simplified_option = simplify_for_match(option)
+                if option.casefold() == desired_normalized.casefold() or simplified_option in desired_variants:
+                    return option
+            for option in options:
+                simplified_option = simplify_for_match(option)
+                if any(variant and variant in simplified_option for variant in desired_variants):
+                    return option
+            return None
+
+        numeric_options = []
+        for option in options:
+            number = numeric_part(option)
+            if number is not None:
+                numeric_options.append((number, option))
+        if not numeric_options:
+            return None
+
+        numeric_options.sort(key=lambda item: item[0])
+        lower_or_equal = [item for item in numeric_options if item[0] <= desired_number]
+        if prefer_lower and lower_or_equal:
+            return lower_or_equal[-1][1]
+        return min(numeric_options, key=lambda item: abs(item[0] - desired_number))[1]
+
+    # Atrod pirmo HTML elementu, kura name sakrīt ar kādu no dotajiem variantiem.
+    def find_first_by_names(self, names):
+        """Atrod pirmo HTML elementu, kura `name` atbilst kādam no variantiem."""
+        for name in names:
+            elements = self.driver.find_elements(By.NAME, name)
+            if elements:
+                return elements[0]
+        return None
+
+    # Ierosina lapas atjaunošanos pēc filtra maiņas.
+    def trigger_refresh(self, element):
+        """Pēc filtra maiņas mēģina ierosināt lapas atjaunošanos."""
+        try:
+            current_body = self.driver.find_element(By.TAG_NAME, "body")
+        except NoSuchElementException:
+            current_body = None
+        try:
+            element.send_keys(Keys.TAB)
+        except Exception:
+            pass
+        self.wait_for_page_ready(previous_body=current_body)
+
+    # Pagaida, kamēr lapa pabeidz pārlādēties.
+    def wait_for_page_ready(self, previous_body=None):
+        """Pagaida, līdz lapa beidz pārlādēties un kļūst lietojama nākamajam solim."""
+        try:
+            if previous_body is not None:
+                self.wait.until(EC.staleness_of(previous_body))
+        except TimeoutException:
+            pass
+        try:
+            self.wait.until(lambda driver: driver.execute_script("return document.readyState") == "complete")
+        except TimeoutException:
+            pass
+        time.sleep(SS_REFRESH_WAIT_SECONDS)
+
+    # Pārbauda, vai lapā vispārīgi redzams paziņojums par neatrastiem sludinājumiem.
+    def page_has_no_results(self):
+        """Pārbauda vispārīgo tekstu par to, ka sludinājumi nav atrasti."""
+        return "Sludinājumi dotajā kategorijā nav atrasti" in self.driver.page_source
+
+    # Pārbauda neatrastu rezultātu paziņojumu tikai SS.com rezultātu lapā.
+    def results_page_has_no_results(self):
+        """Pārbauda neatrastu rezultātu paziņojumu tikai SS.com rezultātu lapās."""
+        current_url = self.driver.current_url.casefold()
+        if "ss.com" not in current_url or "/msg/" in current_url:
+            return False
+        return "SludinÄjumi dotajÄ kategorijÄ nav atrasti" in self.driver.page_source
+
+    # Iziet cauri visām rezultātu lapām un savāc atrastos auto.
+    def collect_results(self, selected_region):
+        """Apstaigā visas rezultātu lapas un savāc sludinājumus no izvēlētā rajona."""
+        self.report("Meklē sludinājumus visās lapās.")
+        results = []
+        visited_links = set()
+        visited_result_pages = set()
+        page_index = 1
+
+        while True:
+            self.wait_for_page_ready()
+            if self.results_page_has_no_results():
+                break
+
+            results_page_url = self.driver.current_url
+            canonical_page_url = canonicalize_url(results_page_url)
+            if canonical_page_url in visited_result_pages:
+                break
+            visited_result_pages.add(canonical_page_url)
+            page_links = self.collect_listing_links_from_page(selected_region)
+            self.found_listing_links += len(page_links)
+            next_link = self.find_next_page()
+            for link in page_links:
+                if link in visited_links:
+                    continue
+                visited_links.add(link)
+                self.report(f"Apstrādā sludinājumu {len(results) + 1}.")
+                car_info = self.scrape_listing_details(link, selected_region)
+                if car_info:
+                    results.append(car_info)
+
+            if not next_link:
+                break
+            if canonicalize_url(next_link) in visited_result_pages:
+                break
+            page_index += 1
+            self.report(f"Pāriet uz {page_index}. lapu.")
+            if self.driver.current_url != results_page_url:
+                self.driver.get(results_page_url)
+                self.wait_for_page_ready()
+            self.driver.get(next_link)
+
+        return results
+
+    # Savāc sludinājumu saites no vienas rezultātu lapas.
+    def collect_listing_links_from_page(self, selected_region):
+        """Savāc sludinājumu saites no vienas SS.com rezultātu lapas."""
+        soup = BeautifulSoup(self.driver.page_source, "html.parser")
+        found = []
+        stop_markers = (
+            "sludinajumi - citi latvijas rajoni",
+            "sludinajumi - citi larvijas rajoni",
+        )
+
+        for row in soup.select("tr"):
+            row_text_normalized = simplify_for_match(row.get_text(" ", strip=True))
+            if any(marker in row_text_normalized for marker in stop_markers):
+                break
+
+            if not (row.get("id") or "").startswith("tr_"):
+                continue
+
+            cells_text = normalize_text(row.get_text(" ", strip=True))
+            if selected_region and selected_region not in ("", "Visi") and selected_region not in cells_text:
+                continue
+            link = row.select_one("a[href*='/msg/']")
+            if link and link.get("href"):
+                found.append(urljoin(SS_URL, link["href"]))
+
+        if found:
+            return found
+
+        for anchor in soup.select("a[href*='/msg/']"):
+            href = anchor.get("href", "")
+            if href:
+                found.append(urljoin(SS_URL, href))
+        return list(dict.fromkeys(found))
+
+    # Atrod nākamās rezultātu lapas saiti.
+    def find_next_page(self):
+        """Atrod nākamās rezultātu lapas saiti, ja tāda eksistē."""
+        soup = BeautifulSoup(self.driver.page_source, "html.parser")
+        next_candidates = [
+            soup.find("a", string=lambda text: text and "Nākamā" in text),
+            soup.find("a", string=lambda text: text and "Next" in text),
+            soup.select_one("a[rel='next']"),
+        ]
+        for candidate in next_candidates:
+            if candidate and candidate.get("href"):
+                return urljoin(self.driver.current_url, candidate["href"])
+        return None
+
+    # Atver vienu sludinājumu un nolasa tā datus.
+    def scrape_listing_details(self, url, selected_region):
+        """Atver vienu sludinājumu un nolasa tā svarīgāko informāciju."""
+        if self.ss_tab and self.ss_tab in self.driver.window_handles:
+            time.sleep(TAB_SWITCH_WAIT_SECONDS)
+            self.driver.switch_to.window(self.ss_tab)
+        self.driver.get(url)
+        self.wait_for_page_ready()
+        soup = BeautifulSoup(self.driver.page_source, "html.parser")
+        fields = self.extract_fields_from_page(soup)
+        region = fields.get("Rajons", "")
+        display_region = region or (selected_region if selected_region not in ("", "Visi") else "")
+
+        if region and selected_region and selected_region not in ("", "Visi") and selected_region not in region:
+            return None
+
+        vin = extract_valid_vin(fields.get("VIN kods", ""))
+        if not vin:
+            vin = self.reveal_vin_code()
+
+        csdd_info = self.fetch_csdd_info(vin) if vin else {}
+        if self.ss_tab and self.ss_tab in self.driver.window_handles:
+            time.sleep(TAB_SWITCH_WAIT_SECONDS)
+            self.driver.switch_to.window(self.ss_tab)
+        title_text = normalize_text(soup.title.string if soup.title else "")
+        model_or_brand = csdd_info.get("marka_modelis") or fields.get("Marka", "") or title_text
+
+        return CarResult(
+            links=url,
+            modelis_marka=model_or_brand,
+            gads=fields.get("Izlaiduma gads", ""),
+            nobraukums=fields.get("Nobraukums", ""),
+            motors=fields.get("Motors", ""),
+            rajons=display_region,
+            apskate_deriga=csdd_info.get("apskate_deriga", ""),
+            nakama_ta=csdd_info.get("nakama_ta", ""),
+        )
+
+    # Izvelk standartlaukus no SS.com detaļu lapas tabulām.
+    def extract_fields_from_page(self, soup):
+        """No SS.com detaļu lapas tabulām izvelk standartlaukus vārdnīcas veidā."""
+        data = {}
+        for row in soup.select("table tr"):
+            cells = row.find_all(["td", "th"])
+            if len(cells) < 2:
+                continue
+            label = clean_label(cells[0].get_text(" ", strip=True))
+            value = normalize_text(cells[1].get_text(" ", strip=True))
+            if label and value and label not in data:
+                data[label] = value
+
+        alias_map = {
+            "Izlaiduma gads": ["Izlaiduma gads", "Gads"],
+            "Nobraukums": ["Nobraukums"],
+            "Motors": ["Motors"],
+            "Rajons": ["Rajons", "Pilsēta, rajons"],
+            "VIN kods": ["VIN kods", "Vin kods"],
+            "Marka": ["Marka", "Marka modelis"],
+        }
+        normalized = {}
+        for target, aliases in alias_map.items():
+            for alias in aliases:
+                if alias in data:
+                    normalized[target] = data[alias]
+                    break
+        return normalized
+
+    # Mēģina atvērt un nolasīt VIN kodu no sludinājuma lapas.
+    def reveal_vin_code(self):
+        """Mēģina padarīt VIN redzamu un nolasīt to no sludinājuma lapas."""
+        existing_vin = extract_vin_from_soup(BeautifulSoup(self.driver.page_source, "html.parser"))
+        if existing_vin:
+            return existing_vin
+
+        buttons = self.driver.find_elements(
+            By.XPATH,
+            "//a[contains(., 'Parādīt vin kodu')] | //input[contains(@value, 'Parādīt vin kodu')]",
+        )
+        for button in buttons:
+            try:
+                time.sleep(TAB_SWITCH_WAIT_SECONDS)
+                self.driver.execute_script("arguments[0].click();", button)
+                time.sleep(SS_SHOW_VIN_WAIT_SECONDS)
+                self.wait_for_manual_verification("pēc pogas 'Parādīt vin kodu' nospiešanas")
+                soup = BeautifulSoup(self.driver.page_source, "html.parser")
+                vin = extract_vin_from_soup(soup)
+                if vin:
+                    return vin
+            except Exception:
+                continue
+
+        return extract_vin_from_soup(BeautifulSoup(self.driver.page_source, "html.parser"))
+
+    # Pārslēdzas uz CSDD cilni vai izveido jaunu.
+    def ensure_csdd_tab(self):
+        """Pārslēdzas uz esošo CSDD cilni vai izveido jaunu, ja tās vēl nav."""
+        if self.csdd_tab and self.csdd_tab in self.driver.window_handles:
+            time.sleep(TAB_SWITCH_WAIT_SECONDS)
+            self.driver.switch_to.window(self.csdd_tab)
+            return
+        time.sleep(TAB_SWITCH_WAIT_SECONDS)
+        self.driver.switch_to.new_window("tab")
+        self.csdd_tab = self.driver.current_window_handle
+
+    # Ievada VIN CSDD sistēmā un nolasa rezultātu.
+    def fetch_csdd_info(self, vin):
+        """Ievada VIN CSDD lapā un nolasā pārbaudes rezultātu."""
+        self.report(f"Pārbauda VIN {vin} CSDD lapā.")
+        self.ensure_csdd_tab()
+        self.driver.get(CSDD_URL)
+        self.wait_for_page_ready()
+        time.sleep(CSDD_INPUT_WAIT_SECONDS)
+
+        vin_input = self.find_csdd_vin_input()
+        if vin_input is None:
+            return {}
+        vin_input.clear()
+        vin_input.send_keys(vin)
+
+        submit = self.find_csdd_submit_button()
+        if submit is None:
+            return {}
+        self.driver.execute_script("arguments[0].click();", submit)
+        self.wait_for_page_ready()
+        soup = BeautifulSoup(self.driver.page_source, "html.parser")
+        return self.parse_csdd_page(soup)
+
+    # Atrod CSDD VIN ievades lauku.
+    def find_csdd_vin_input(self):
+        """Atrod CSDD lapas VIN ievades lauku."""
+        candidates = [
+            (By.NAME, "vin"),
+            (By.ID, "vin"),
+            (By.XPATH, "//input[@type='text']"),
+        ]
+        for locator in candidates:
+            try:
+                return self.wait.until(EC.presence_of_element_located(locator))
+            except TimeoutException:
+                continue
+        return None
+
+    # Atrod CSDD pogu, kas sāk VIN pārbaudi.
+    def find_csdd_submit_button(self):
+        """Atrod CSDD pogu, kas palaiž VIN pārbaudi."""
+        candidates = [
+            (By.XPATH, "//button[contains(., 'Turpināt')]"),
+            (By.XPATH, "//input[@type='submit' and contains(@value, 'Turpināt')]"),
+            (By.XPATH, "//input[@type='submit']"),
+            (By.XPATH, "//button[@type='submit']"),
+        ]
+        for locator in candidates:
+            try:
+                return self.wait.until(EC.element_to_be_clickable(locator))
+            except TimeoutException:
+                continue
+        return None
+
+    # Izvelk vajadzīgos datus no CSDD rezultātu lapas.
+    def parse_csdd_page(self, soup):
+        """No CSDD rezultātu lapas izvelk modeli, apskates datumu un derīgumu."""
+        text = normalize_text(soup.get_text(" ", strip=True))
+        simplified_text = simplify_for_match(text)
+        data = {"marka_modelis": "", "nakama_ta": "", "apskate_deriga": ""}
+
+        for row in soup.select("tr"):
+            cells = row.find_all(["td", "th"])
+            if len(cells) < 2:
+                continue
+            label = simplify_for_match(clean_label(cells[0].get_text(" ", strip=True)))
+            value = normalize_text(cells[1].get_text(" ", strip=True))
+            if not data["nakama_ta"] and re.search(r"\b\d{2}\.\d{2}\.\d{4}\b", value):
+                data["nakama_ta"] = value
+            if "marka" in label and "model" in label:
+                data["marka_modelis"] = value
+            elif "nākamās tehniskās apskates datums" in label or "tehniskās apskates datums" in label:
+                data["nakama_ta"] = value
+
+        if "nav derīga" in text.casefold() or "nederīga" in text.casefold():
+            data["apskate_deriga"] = "Nav"
+        elif "derīga" in text.casefold():
+            data["apskate_deriga"] = "Ir"
+        elif data["nakama_ta"]:
+            data["apskate_deriga"] = "Ir"
+
+        if not data["apskate_deriga"]:
+            if "nav deriga" in simplified_text or "nederiga" in simplified_text:
+                data["apskate_deriga"] = "Nav"
+            elif "deriga" in simplified_text:
+                data["apskate_deriga"] = "Ir"
+
+        return data
+
+
+class ResultsWindow(tk.Toplevel):
+    """Atsevišķs logs, kas parāda atrastos auto tabulas formā."""
+    # Inicializē rezultātu logu ar saņemtajiem ierakstiem.
+    def __init__(self, master, results):
+        """Sagatavo rezultātu logu un ielādē tajā atrastos ierakstus."""
+        super().__init__(master)
+        self.title("Meklēšanas rezultāti")
+        self.geometry("1280x560")
+        self.original_results = list(results)
+        self.results = list(results)
+        self.sort_var = tk.StringVar(value="Bez kārtošanas")
+        self.build()
+
+    # Uzbūvē rezultātu loga tabulu, pogas un kārtošanas izvēlni.
+    def build(self):
+        """Uzbūvē rezultātu loga tabulu, pogas un kārtošanas izvēlni."""
+        tk.Label(
+            self,
+            text="Dubultklikšķis uz rindas atver sludinājumu. Poga kopē izvēlēto linku.",
+            anchor="w",
+        ).pack(fill="x", padx=10, pady=(10, 0))
+
+        controls = tk.Frame(self)
+        controls.pack(fill="x", padx=10, pady=(10, 0))
+        tk.Label(controls, text="Kārtot pēc:").pack(side="left")
+        sort_combo = ttk.Combobox(
+            controls,
+            textvariable=self.sort_var,
+            state="readonly",
+            width=26,
+            values=(
+                "Bez kārtošanas",
+                "Gads: no mazākā uz lielāko",
+                "Gads: no lielākā uz mazāko",
+                "Motors: no mazākā uz lielāko",
+                "Motors: no lielākā uz mazāko",
+                "Modelis: no A līdz Z",
+                "Modelis: no Z līdz A",
+            ),
+        )
+        sort_combo.pack(side="left", padx=(8, 0))
+        sort_combo.bind("<<ComboboxSelected>>", self.apply_sort)
+
+        columns = (
+            "links",
+            "modelis_marka",
+            "gads",
+            "motors",
+            "rajons",
+            "apskate_deriga",
+            "nakama_ta",
+        )
+        self.tree = ttk.Treeview(self, columns=columns, show="headings")
+        headings = {
+            "links": "Links",
+            "modelis_marka": "Modelis, marka",
+            "gads": "Gads",
+            "motors": "Motors",
+            "rajons": "Rajons",
+            "apskate_deriga": "Vai šobrīd apskate ir derīga?",
+            "nakama_ta": "Nākamās tehniskās apskates datums",
+        }
+        widths = {
+            "links": 320,
+            "modelis_marka": 220,
+            "gads": 80,
+            "motors": 160,
+            "rajons": 120,
+            "apskate_deriga": 170,
+            "nakama_ta": 180,
+        }
+
+        for column in columns:
+            self.tree.heading(column, text=headings[column])
+            self.tree.column(column, width=widths[column], anchor="w")
+
+        y_scroll = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
+        x_scroll = ttk.Scrollbar(self, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+        self.tree.pack(fill="both", expand=True, padx=10, pady=(10, 0))
+        y_scroll.pack(side="right", fill="y")
+        x_scroll.pack(fill="x", padx=10, pady=(0, 10))
+
+        self.populate_tree()
+
+        buttons = tk.Frame(self)
+        buttons.pack(fill="x", padx=10, pady=(0, 10))
+        tk.Button(buttons, text="Kopēt linku", command=self.copy_selected_link).pack(side="left")
+        tk.Button(buttons, text="Aizvērt", command=self.destroy).pack(side="right")
+        self.tree.bind("<Double-1>", self.open_selected_link)
+
+    # Pārzīmē tabulu ar pašreizējo rezultātu sarakstu.
+    def populate_tree(self):
+        """Pārzīmē tabulu ar pašreizējo rezultātu sarakstu."""
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        for result in self.results:
+            self.tree.insert(
+                "",
+                "end",
+                values=(
+                    self.display_value(result.links, allow_empty=True),
+                    self.display_value(result.modelis_marka),
+                    self.display_value(result.gads),
+                    self.display_value(result.motors),
+                    self.display_value(result.rajons),
+                    self.display_value(result.apskate_deriga),
+                    self.display_value(result.nakama_ta),
+                ),
+            )
+
+    # Aizvieto tukšās vērtības ar saprotamu attēlojumu tabulā.
+    def display_value(self, value, allow_empty=False):
+        """Aizvieto tukšas vērtības ar saprotamu tekstu tabulā."""
+        text = normalize_text(value)
+        if text:
+            return text
+        return "" if allow_empty else " - "
+
+    # Sakārto rezultātu sarakstu pēc lietotāja izvēlētā kritērija.
+    def apply_sort(self, _event=None):
+        """Sakārto tabulu pēc lietotāja izvēlētā kritērija."""
+        choice = self.sort_var.get()
+        if choice == "Bez kārtošanas":
+            self.results = list(self.original_results)
+        elif choice == "Gads: no mazākā uz lielāko":
+            self.results = sorted(self.results, key=self.sort_year_key)
+        elif choice == "Gads: no lielākā uz mazāko":
+            self.results = sorted(self.results, key=self.sort_year_key, reverse=True)
+        elif choice == "Motors: no mazākā uz lielāko":
+            self.results = sorted(self.results, key=lambda result: self.sort_motor_value(result.motors))
+        elif choice == "Motors: no lielākā uz mazāko":
+            self.results = sorted(self.results, key=lambda result: self.sort_motor_value(result.motors), reverse=True)
+        elif choice == "Modelis: no A līdz Z":
+            self.results = sorted(self.results, key=lambda result: self.sort_model_value(result.modelis_marka))
+        elif choice == "Modelis: no Z līdz A":
+            self.results = sorted(self.results, key=lambda result: self.sort_model_value(result.modelis_marka), reverse=True)
+        self.populate_tree()
+
+    # Izvelk gadu no teksta kā skaitli.
+    def sort_year_value(self, year_text):
+        """Izvelk tikai gada skaitlisko daļu no teksta."""
+        match = re.search(r"\d{4}", normalize_text(year_text))
+        return int(match.group(0)) if match else -1
+
+    # Izvelk motora tilpuma skaitlisko daļu kārtošanai.
+    def sort_motor_value(self, motor_text):
+        """Izvelk motora tilpuma skaitlisko daļu kārtošanai."""
+        value = numeric_part(motor_text)
+        return float(value) if value is not None else -1.0
+
+    # Izveido kombinētu atslēgu kārtošanai pēc gada, mēneša un modeļa.
+    def sort_year_key(self, result):
+        """Izveido kārtošanas atslēgu pēc gada, mēneša un modeļa."""
+        year_value, month_value = self.sort_year_month_value(result.gads)
+        model_key = self.sort_model_value(result.modelis_marka)
+        return (year_value, month_value, model_key)
+
+    # Atpazīst gadu un mēnesi no gada teksta, ja mēnesis ir norādīts.
+    def sort_year_month_value(self, year_text):
+        """Atpazīst gadu un mēnesi no `Gads` lauka teksta."""
+        text = simplify_for_match(year_text)
+        year_match = re.search(r"\d{4}", text)
+        year_value = int(year_match.group(0)) if year_match else -1
+
+        month_order = {
+            "janvaris": 1,
+            "februaris": 2,
+            "marts": 3,
+            "aprilis": 4,
+            "maijs": 5,
+            "junijs": 6,
+            "julijs": 7,
+            "augusts": 8,
+            "septembris": 9,
+            "oktobris": 10,
+            "novembris": 11,
+            "decembris": 12,
+        }
+        for month_name, month_value in month_order.items():
+            if month_name in text:
+                return year_value, month_value
+
+        return year_value, -1
+
+    # Pārvērš datuma tekstu `(gads, mēnesis)` formā kārtošanai.
+    def sort_month_year_value(self, date_text):
+        """Pārvērš datuma tekstu `(gads, mēnesis)` formā kārtošanai."""
+        text = normalize_text(date_text)
+        match = re.search(r"(\d{2})[./-](\d{2})[./-](\d{4})", text)
+        if match:
+            month = int(match.group(2))
+            year = int(match.group(3))
+            return year, month
+
+        match = re.search(r"(\d{1,2})[./-](\d{4})", text)
+        if match:
+            month = int(match.group(1))
+            year = int(match.group(2))
+            return year, month
+
+        return -1, -1
+
+    # Kārto modeļus dabiski, vispirms pēc cipariem un tad pēc teksta.
+    def sort_model_value(self, model_text):
+        """Kārto modeli dabiski: vispirms cipari, tad burti, ignorējot lielos burtus."""
+        tokens = re.findall(r"\d+|[A-ZĀČĒĢĪĶĻŅŠŪŽ]+", normalize_text(model_text).upper())
+        key = []
+        for token in tokens:
+            if token.isdigit():
+                key.append((0, int(token)))
+            else:
+                key.append((1, token.casefold()))
+        return key
+
+    # Atgriež šobrīd atlasītās tabulas rindas vērtības.
+    def selected_values(self):
+        """Atgriež lietotāja izvēlētās tabulas rindas vērtības."""
+        selected = self.tree.selection()
+        if not selected:
+            return None
+        return self.tree.item(selected[0], "values")
+
+    # Nokopē izvēlētās rindas linku starpliktuvē.
+    def copy_selected_link(self):
+        """Nokopē atlasītās rindas sludinājuma linku starpliktuvē."""
+        values = self.selected_values()
+        if not values:
+            messagebox.showwarning("Brīdinājums", "Izvēlies rindu, kuras linku kopēt.", parent=self)
+            return
+        self.clipboard_clear()
+        self.clipboard_append(values[0])
+        messagebox.showinfo("Informācija", "Links nokopēts starpliktuvē.", parent=self)
+
+    # Atver izvēlētās rindas sludinājumu pārlūkā.
+    def open_selected_link(self, _event=None):
+        """Atver atlasītās rindas sludinājumu pārlūkā."""
+        values = self.selected_values()
+        if values:
+            open_url(values[0])
+
+
+class SSApp:
+    """Galvenā Tkinter lietotne, kas vada ievadi, progresu un rezultātu logus."""
+    # Inicializē galveno logu un programmas mainīgos.
+    def __init__(self):
+        """Inicializē galveno logu un programmas stāvokli."""
+        self.root = tk.Tk()
+        self.root.title("SS.com auto meklētājs")
+        self.root.geometry("520x560")
+        self.root.resizable(False, False)
+
+        self.queue = queue.Queue()
+        self.current_frame = None
+        self.progress_window = None
+        self.progress_var = tk.StringVar(value="Gaida ievadi.")
+        self.brand_var = tk.StringVar(value="")
+        self.filter_widgets = {}
+
+        self.show_brand_screen()
+        self.root.after(200, self.poll_queue)
+
+    # Palaiž Tkinter notikumu cilpu.
+    def run(self):
+        """Palaiž Tkinter notikumu cilpu."""
+        self.root.mainloop()
+
+    # Notīra iepriekšējo satura rāmi pirms nākamā skata parādīšanas.
+    def clear_current_frame(self):
+        """Noņem iepriekšējo satura rāmi pirms nākamā soļa parādīšanas."""
+        if self.current_frame is not None:
+            self.current_frame.destroy()
+
+    # Parāda pirmo soli, kur lietotājs izvēlas auto marku.
+    def show_brand_screen(self):
+        """Parāda pirmo logu, kur lietotājs izvēlas auto marku."""
+        self.clear_current_frame()
+        frame = tk.Frame(self.root, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+        self.current_frame = frame
+
+        tk.Label(frame, text="SS.com auto meklētājs", font=("Arial", 16, "bold")).pack(pady=(10, 5))
+        tk.Label(frame, text="1. solis: izvēlies automašīnas marku").pack(pady=(0, 15))
+
+        list_frame = tk.Frame(frame)
+        list_frame.pack(fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
+        self.brand_listbox = tk.Listbox(
+            list_frame,
+            exportselection=False,
+            yscrollcommand=scrollbar.set,
+            height=20,
+            width=32,
+        )
+        scrollbar.config(command=self.brand_listbox.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.brand_listbox.pack(side="left", fill="both", expand=True)
+
+        for brand in MARKAS[1:]:
+            self.brand_listbox.insert(tk.END, brand)
+
+        tk.Button(frame, text="Tālāk", width=16, command=self.handle_brand_next).pack(pady=16)
+        self.brand_listbox.bind("<Double-1>", lambda _event: self.handle_brand_next())
+        self.brand_listbox.bind("<Return>", lambda _event: self.handle_brand_next())
+
+    # Apstrādā markas izvēli un pāriet uz filtru logu.
+    def handle_brand_next(self):
+        """Pārbauda markas izvēli un pāriet uz filtru logu."""
+        selected = self.brand_listbox.curselection()
+        if not selected:
+            messagebox.showwarning("Brīdinājums", "Lūdzu, izvēlies marku.")
+            return
+        self.brand_var.set(self.brand_listbox.get(selected[0]))
+        self.show_filters_screen()
+
+    # Parāda filtru ievades logu izvēlētajai markai.
+    def show_filters_screen(self):
+        """Parāda logu, kur lietotājs ievada meklēšanas filtrus."""
+        self.clear_current_frame()
+        frame = tk.Frame(self.root, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+        self.current_frame = frame
+
+        tk.Label(frame, text=f"2. solis: filtri markai {self.brand_var.get()}", font=("Arial", 14, "bold")).pack(pady=(0, 15))
+
+        form = tk.Frame(frame)
+        form.pack(fill="x")
+        vcmd = (self.root.register(only_digits_or_empty), "%P")
+
+        self.add_entry_row(form, 0, "Cena no:", "cena_no", vcmd)
+        self.add_entry_row(form, 1, "Cena līdz:", "cena_lidz", vcmd)
+        self.add_combo_row(form, 2, "Gads no:", "gads_no", GADI, width=14)
+        self.add_combo_row(form, 3, "Gads līdz:", "gads_lidz", GADI, width=14)
+        self.add_combo_row(form, 4, "Tilpums no:", "tilpums_no", TILPUMI, width=14)
+        self.add_combo_row(form, 5, "Tilpums līdz:", "tilpums_lidz", TILPUMI, width=14)
+        self.add_combo_row(form, 6, "Dzinējs:", "dzinejs", DZINEJI)
+        self.add_combo_row(form, 7, "Ātrumkārba:", "atrumkarba", ATRUMKARBAS)
+        self.add_combo_row(form, 8, "Rajons:", "rajons", RAJONI, width=24)
+
+        buttons = tk.Frame(frame)
+        buttons.pack(fill="x", pady=20)
+        tk.Button(buttons, text="Atpakaļ", width=14, command=self.show_brand_screen).pack(side="left")
+        tk.Button(buttons, text="Meklēt", width=14, command=self.start_search).pack(side="right")
+
+    # Pievieno formai teksta ievades rindu.
+    def add_entry_row(self, parent, row, label, key, validate_command):
+        """Pievieno formai teksta ievades rindu ar validāciju."""
+        tk.Label(parent, text=label, width=16, anchor="w").grid(row=row, column=0, sticky="w", pady=6)
+        entry = tk.Entry(parent, validate="key", validatecommand=validate_command, width=18)
+        entry.grid(row=row, column=1, sticky="w")
+        self.filter_widgets[key] = entry
+
+    # Pievieno formai dropdown izvēles rindu.
+    def add_combo_row(self, parent, row, label, key, values, width=18):
+        """Pievieno formai dropdown izvēles rindu."""
+        tk.Label(parent, text=label, width=16, anchor="w").grid(row=row, column=0, sticky="w", pady=6)
+        combo = ttk.Combobox(parent, values=values, state="readonly", width=width)
+        combo.grid(row=row, column=1, sticky="w")
+        combo.set("")
+        self.filter_widgets[key] = combo
+
+    # Savāc visas ievades un izveido SearchFilters objektu.
+    def build_filters(self):
+        """Savāc visas lietotāja ievades un izveido SearchFilters objektu."""
+        values = {key: widget.get().strip() for key, widget in self.filter_widgets.items()}
+        return SearchFilters(marka=self.brand_var.get(), **values)
+
+    # Pārbauda, vai lietotāja ievadītie filtri ir loģiski derīgi.
+    def validate_filters(self, filters):
+        """Pārbauda, vai filtru ievades ir loģiskas un savstarpēji saderīgas."""
+        if not filters.marka:
+            return "Marka nav izvēlēta."
+        if filters.cena_no and filters.cena_lidz and int(filters.cena_no) > int(filters.cena_lidz):
+            return "Cena no nedrīkst būt lielāka par cenu līdz."
+        if filters.gads_no and filters.gads_lidz and int(filters.gads_no) > int(filters.gads_lidz):
+            return "Gads no nedrīkst būt lielāks par gadu līdz."
+        tilpums_no = to_decimal(filters.tilpums_no)
+        tilpums_lidz = to_decimal(filters.tilpums_lidz)
+        if tilpums_no and tilpums_lidz and tilpums_no > tilpums_lidz:
+            return "Tilpums no nedrīkst būt lielāks par tilpumu līdz."
+        return None
+
+    # Palaiž meklēšanu fonā pēc validācijas.
+    def start_search(self):
+        """Palaiž meklēšanu fonā pēc filtru validācijas."""
+        filters = self.build_filters()
+        error = self.validate_filters(filters)
+        if error:
+            messagebox.showwarning("Brīdinājums", error)
+            return
+        self.show_progress_window()
+        worker = threading.Thread(target=self.search_worker, args=(filters,), daemon=True)
+        worker.start()
+
+    # Parāda nelielu progresu logu, kamēr Selenium strādā.
+    def show_progress_window(self):
+        """Parāda mazo progresu logu, kamēr Selenium strādā fonā."""
+        if self.progress_window and self.progress_window.winfo_exists():
+            self.progress_window.destroy()
+
+        self.progress_window = tk.Toplevel(self.root)
+        self.progress_window.title("Meklēšana")
+        self.progress_window.geometry("420x140")
+        self.progress_window.resizable(False, False)
+        self.progress_window.transient(self.root)
+        self.progress_window.grab_set()
+
+        tk.Label(
+            self.progress_window,
+            text="Programma šobrīd strādā ar SS.com un CSDD.",
+            font=("Arial", 11, "bold"),
+        ).pack(pady=(20, 10))
+        tk.Label(
+            self.progress_window,
+            textvariable=self.progress_var,
+            wraplength=360,
+            justify="left",
+        ).pack(padx=20)
+
+    # Fona pavedienā izpilda skrāpēšanu un nosūta rezultātus uz UI.
+    def search_worker(self, filters):
+        """Fona pavedienā izpilda skrāpēšanu un nosūta rezultātu ziņas rindā."""
+        scraper = SSCarScraper(
+            progress_callback=lambda text: self.queue.put(("progress", text)),
+            manual_verification_callback=self.request_manual_verification,
+        )
+        try:
+            results = scraper.run(filters)
+            self.queue.put(("success", results))
+        except NoResultsError as error:
+            self.queue.put(("empty", str(error)))
+        except ManualVerificationRequiredError as error:
+            self.queue.put(("error", str(error)))
+        except WebDriverException as error:
+            self.queue.put(("error", f"Neizdevās palaist Selenium vai Chrome: {error}"))
+        except Exception as error:
+            self.queue.put(("error", str(error)))
+
+    # No fona pavediena pieprasa manuālu CAPTCHA apstiprinājumu.
+    def request_manual_verification(self, message):
+        """No fona pavediena pieprasa lietotājam manuāli apstiprināt CAPTCHA soli."""
+        event = threading.Event()
+        response = {"continue": False}
+        self.queue.put(("captcha", {"message": message, "event": event, "response": response}))
+        event.wait()
+        return response["continue"]
+
+    # Parāda lietotājam verifikācijas dialogu un nodod atbildi atpakaļ workerim.
+    def handle_manual_verification(self, payload):
+        """Parāda dialogu lietotājam un nodod viņa atbildi atpakaļ worker pavedienam."""
+        self.progress_var.set("Gaida manuālu verifikāciju SS.com lapā.")
+        parent = self.progress_window if self.progress_window and self.progress_window.winfo_exists() else self.root
+        should_continue = messagebox.askokcancel(
+            "Nepieciešama verifikācija",
+            payload["message"],
+            parent=parent,
+        )
+        payload["response"]["continue"] = should_continue
+        payload["event"].set()
+
+    # Regulāri nolasa ziņu rindu un atjauno lietotāja interfeisu.
+    def poll_queue(self):
+        """Regulāri nolasa ziņu rindu un atjauno Tkinter interfeisu."""
+        try:
+            while True:
+                message_type, payload = self.queue.get_nowait()
+                if message_type == "progress":
+                    self.progress_var.set(payload)
+                elif message_type == "success":
+                    self.close_progress_window()
+                    ResultsWindow(self.root, payload)
+                elif message_type == "empty":
+                    self.close_progress_window()
+                    messagebox.showinfo("Rezultātu nav", payload)
+                elif message_type == "captcha":
+                    self.handle_manual_verification(payload)
+                elif message_type == "error":
+                    self.close_progress_window()
+                    messagebox.showerror("Kļūda", payload)
+        except queue.Empty:
+            pass
+        self.root.after(200, self.poll_queue)
+
+    # Aizver progresu logu un atiestata statusa tekstu.
+    def close_progress_window(self):
+        """Aizver progresu logu un atiestata statusa tekstu."""
+        if self.progress_window and self.progress_window.winfo_exists():
+            self.progress_window.grab_release()
+            self.progress_window.destroy()
+        self.progress_window = None
+        self.progress_var.set("Gaida ievadi.")
+
+
+if __name__ == "__main__":
+    SSApp().run()
