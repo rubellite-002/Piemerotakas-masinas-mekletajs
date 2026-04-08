@@ -1,0 +1,75 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+
+#--------------------------------------------------------
+# VAI SELENIUM VAR IEVADĪT UN SKRĀPĒT DATUS NO E-CSDD ?
+#--------------------------------------------------------
+# ievada VIN kodu E-CSDD mājaslapā, pagaida
+# kamēr ielādējas un noskrāpē info
+# terminālī izvada vai tehniskā apskate ir derīga
+# un kad ir nākamā apskate
+
+VIN_KODS = "2C4RLAB5XCR299424"  # īstajā darbā to noskrāpēs no SS.com
+URL = "https://e.csdd.lv/chkta"
+
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+driver.maximize_window()
+
+try:
+    driver.get(URL)
+    wait = WebDriverWait(driver, 15)
+
+    # Atrodam VIN ievades lauku
+    ievades_lauks = wait.until(EC.presence_of_element_located(
+        (By.XPATH, "//input[@type='text']")
+    ))
+
+    ievades_lauks.clear()
+    ievades_lauks.send_keys(VIN_KODS)
+
+    # Nospiež Enter (vai vari izmantot pogu)
+    ievades_lauks.send_keys(Keys.ENTER)
+
+    # GAIDĀM rezultātus
+    wait.until(EC.presence_of_element_located(
+        (By.XPATH, "//*[contains(text(), 'Tehniskā apskate')]")
+    ))
+
+    # Paņem visu lapas tekstu
+    teksts = driver.find_element(By.TAG_NAME, "body").text
+
+    # -----------------------------
+    # ANALĪZE
+    # -----------------------------
+
+    deriga = "derīga" in teksts.lower()
+
+    # Meklē datumu (piemēram: 12.05.2025)
+    import re
+    datumi = re.findall(r"\d{2}\.\d{2}\.\d{4}", teksts)
+
+    nakamais_datums = datumi[0] if datumi else "Nav atrasts"
+
+    # -----------------------------
+    # IZVADE
+    # -----------------------------
+
+    print("\n--- REZULTĀTS ---")
+
+    if deriga:
+        print("Tehniskā apskate: DERĪGA ✅")
+    else:
+        print("Tehniskā apskate: NAV derīga ❌")
+
+    print(f"Nākamā apskate: {nakamais_datums}")
+
+finally:
+    input("\nNospied ENTER, lai aizvērtu...")
+
+
+    driver.quit()
