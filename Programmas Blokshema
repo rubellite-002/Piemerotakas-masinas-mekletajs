@@ -1,0 +1,56 @@
+[SĀKUMS]
+↓
+[Startē Tkinter]
+↓
+(Lietotājs ievada mašīnas marku)
+├── Nē → [Parāda brīdinājumu] → (atpakaļ)
+ └── Jā
+↓
+[Parāda filtru ievadi]
+↓
+[Lietotājs ievada filtrus]
+↓
+(Vai ievadītie filtri ir korekti?)
+├── Nē → [Parāda brīdinājumu] → (atpakaļ)
+ └── Jā
+↓
+[Startē meklēšanu]
+↓
+[Atver SS.com ar Selenium]
+↓
+[Izvēlas marku]
+↓
+[Ievada filtrus]
+↓
+(Vai ir rezultāti?)
+├── Nē → [Ar Tkinter ziņo, ka nav rezultātu] → [BEIGAS]
+ └── Jā
+↓
+[Programma iziet cauri visām lapām]
+↓
+[Izvelk sludinājumu linkus]
+↓
+[Atver katru sludinājumu]
+↓
+↓
+[No sludinājuma izvelk datus]
+↓
+(Vai ir VIN?)
+├── Nē → [Atklāj VIN] 
+ └── Jā
+↓
+[Pārbauda VIN E-CSDD mājaslapā]
+↓
+[Saņem TA datus]
+↓
+[Pievieno rezultātu sarakstam]
+↓
+(Vai ir nākamā lapa?)
+├── Jā → (Atpakaļ uz “Programma iziet cauri visām lapām”) 
+ └── Nē
+↓
+[Parāda rezultātus tabulā Tkinter logā]
+↓
+[BEIGAS]
+
+
