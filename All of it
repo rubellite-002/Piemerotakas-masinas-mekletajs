@@ -14,7 +14,7 @@ import webbrowser
 from dataclasses import dataclass
 # `Decimal` palīdz precīzi strādāt ar motora tilpuma skaitļiem.
 from decimal import Decimal, InvalidOperation
-# `messagebox` rāda brīdinājumus/info logus, `ttk` dod modernākus Tkinter elementus.
+# `messagebox` rāda brīdinājumus/info logus, `tk` dod modernākus Tkinter elementus.
 from tkinter import messagebox, ttk
 # `urllib.parse` palīdz veidot, salīdzināt un normalizēt URL adreses.
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
